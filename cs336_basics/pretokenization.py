@@ -57,7 +57,7 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def process_chunk(file_path, start, end, special_tokens):
+def process_chunk(file_path, start, end, special_tokens: list[str] | None):
     with open(file_path, "rb") as f:
         f.seek(start)
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
@@ -89,6 +89,20 @@ def pretokenize(file_path, special_tokens):
     for s in ret_list:
         ret.update(s)
     
+    return ret
+
+def text_pretokenize(text:str, special_tokens: list[str]) -> list[str]:
+    if special_tokens:
+        chunks = re.split("("+"|".join(re.escape(s) for s in special_tokens) + ")", text)
+    else:
+        chunks = [text]
+    ret = []
+    for i in range(len(chunks)):
+        if chunks[i] in special_tokens:
+            ret.append(chunks[i])
+            continue
+        for token in iter(re.finditer(PAT, chunks[i])):
+            ret.append(token.group(0))
     return ret
 
 ## Usage
