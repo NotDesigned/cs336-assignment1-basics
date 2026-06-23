@@ -1,3 +1,5 @@
+from typing import Iterable
+
 from .pretokenization import pretokenize, text_pretokenize
 from collections import Counter
 
@@ -12,7 +14,7 @@ class BPE_Tokenizer:
     def from_vocab_merges(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None):
         self.vocab = vocab
         self.merges = merges
-        self.special_tokens = special_tokens
+        self.special_tokens = sorted(set(special_tokens), reverse=True) if special_tokens is not None else None
         self.reverse_vocab = {v:k for k,v in vocab.items()}
 
     def train_from_file(self, file_path:str, vocab_size: int, special_tokens: list[str]):
@@ -148,9 +150,47 @@ class BPE_Tokenizer:
         
         return ret
     
+    def encode_iterable(self, f: Iterable[str]):
+        for text in f:
+            pretokenized_text = text_pretokenize(text, self.special_tokens)
+        
+            unique_pretokens = set(pretokenized_text)
+            
+            ret:list[int] = []
+            
+            # For each unique pretoken, we calculate the targeted token decomposition (merges) for it.
+            pretoken_expression: dict[str, list[bytes]] = {}
+            
+            for pretoken in unique_pretokens:
+                pretoken_byte = pretoken.encode("utf-8")
+                if self.special_tokens is not None and pretoken in self.special_tokens:
+                    pretoken_expression[pretoken] = [pretoken_byte]
+                else:
+                    pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))]
+            
+            # Apply merges to each expression with priority
+            for pretoken, expression in pretoken_expression.items():
+                for merge in self.merges:
+                    new_expression = []
+                    i = 0
+                    while i < len(expression):
+                        if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
+                            new_expression.append(expression[i]+expression[i+1])
+                            i += 2
+                        else:
+                            new_expression.append(expression[i])
+                            i += 1
+                    expression = pretoken_expression[pretoken] = new_expression
+        
+            for pretoken in pretokenized_text:
+                for token in pretoken_expression[pretoken]:
+                    ret.append(self.reverse_vocab[token])
+            
+            yield ret
+    
     def decode(self, tokens: list[int]) -> str:
         pieces: list[bytes] = []
         for token in tokens:
             pieces.append(self.vocab[token])
         ret: bytes = b"".join(pieces)
-        return ret.decode("utf-8")
+        return ret.decode("utf-8",errors="ignore")
