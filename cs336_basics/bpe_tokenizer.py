@@ -27,7 +27,6 @@ class BPE_Tokenizer:
         """
         Train the Tokenizer and return the vocab and merges
         """
-        assert self.count != None, "Run pretokenization before training"
         
         # Initialize with special tokens and 256 byte values
         id = 0
@@ -137,12 +136,11 @@ class BPE_Tokenizer:
                 while i < len(expression):
                     if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
                         new_expression.append(expression[i]+expression[i+1])
-                        flag = True
                         i += 2
                     else:
                         new_expression.append(expression[i])
                         i += 1
-                pretoken_expression[pretoken] = new_expression
+                expression = pretoken_expression[pretoken] = new_expression
     
         for pretoken in pretokenized_text:
             for token in pretoken_expression[pretoken]:
