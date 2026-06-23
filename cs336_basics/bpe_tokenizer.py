@@ -150,43 +150,80 @@ class BPE_Tokenizer:
         
         return ret
     
+    def pretoken_iterable(self, f:Iterable[str]):
+        """stream through the iterable and yield pretoken
+
+        Args:
+            f (Iterable[str]): string stream
+        """
+        # The idea is that we maintain a buffer
+        # The key is how can we tell that whether a byte in the unsafe buffer become safe? If it cannot be any merging prefix. It must be safe.
+        # After appending a chunk, pretokenize the current buffer.
+        # Encode/yield every pretoken except the last one.
+        # Keep the exact text of the last pretoken in buffer.
+        # At EOF, encode/yield the remaining buffer.
+        buffer = ""
+        for string in f:
+            buffer += string
+            max_special_token_start = len(buffer)
+            while max_special_token_start > 0 and self.special_tokens:
+                flag = True
+                for special_token in self.special_tokens:
+                    if special_token.startswith(buffer[max_special_token_start-1:]):
+                       max_special_token_start -= 1
+                       flag=False
+                       break
+                if flag:
+                    break
+            
+            suffix = buffer[max_special_token_start:]
+            buffer = buffer[:max_special_token_start]
+            
+            ret = text_pretokenize(buffer, special_tokens=self.special_tokens)
+            if len(ret) > 1:
+                for i in range(len(ret)-1):
+                    yield ret[i]
+            
+            if len(ret) > 0:
+                buffer = ret[-1]
+
+            buffer += suffix
+
+        yield buffer
+                
+    
     def encode_iterable(self, f: Iterable[str]):
-        for text in f:
-            pretokenized_text = text_pretokenize(text, self.special_tokens)
-        
-            unique_pretokens = set(pretokenized_text)
-            
-            ret:list[int] = []
-            
-            # For each unique pretoken, we calculate the targeted token decomposition (merges) for it.
-            pretoken_expression: dict[str, list[bytes]] = {}
-            
-            for pretoken in unique_pretokens:
+        """stream through the iterable and yield token
+
+        Args:
+            f (Iterable[str]): string stream
+        """
+        pretoken_expression: dict[str, list[bytes]] = {}
+        for pretoken in self.pretoken_iterable(f):
+            if pretoken not in pretoken_expression:    
                 pretoken_byte = pretoken.encode("utf-8")
                 if self.special_tokens is not None and pretoken in self.special_tokens:
                     pretoken_expression[pretoken] = [pretoken_byte]
                 else:
-                    pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))]
+                    pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))] 
+
+            expression = pretoken_expression[pretoken]
+            for merge in self.merges:
+                new_expression = []
+                i = 0
+                while i < len(expression):
+                    if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
+                        new_expression.append(expression[i]+expression[i+1])
+                        i += 2
+                    else:
+                        new_expression.append(expression[i])
+                        i += 1
+                expression = pretoken_expression[pretoken] = new_expression
             
-            # Apply merges to each expression with priority
-            for pretoken, expression in pretoken_expression.items():
-                for merge in self.merges:
-                    new_expression = []
-                    i = 0
-                    while i < len(expression):
-                        if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                            new_expression.append(expression[i]+expression[i+1])
-                            i += 2
-                        else:
-                            new_expression.append(expression[i])
-                            i += 1
-                    expression = pretoken_expression[pretoken] = new_expression
+            for token in pretoken_expression[pretoken]:
+                yield self.reverse_vocab[token]
         
-            for pretoken in pretokenized_text:
-                for token in pretoken_expression[pretoken]:
-                    ret.append(self.reverse_vocab[token])
             
-            yield ret
     
     def decode(self, tokens: list[int]) -> str:
         pieces: list[bytes] = []
