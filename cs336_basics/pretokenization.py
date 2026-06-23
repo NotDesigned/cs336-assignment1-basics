@@ -91,14 +91,14 @@ def pretokenize(file_path, special_tokens):
     
     return ret
 
-def text_pretokenize(text:str, special_tokens: list[str]) -> list[str]:
+def text_pretokenize(text:str, special_tokens: list[str] | None) -> list[str]:
     if special_tokens:
         chunks = re.split("("+"|".join(re.escape(s) for s in special_tokens) + ")", text)
     else:
         chunks = [text]
     ret = []
     for i in range(len(chunks)):
-        if chunks[i] in special_tokens:
+        if special_tokens is not None and chunks[i] in special_tokens:
             ret.append(chunks[i])
             continue
         for token in iter(re.finditer(PAT, chunks[i])):

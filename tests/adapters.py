@@ -8,7 +8,7 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-from ..cs336_basics.bpe_tokenizer import BPE_Tokenizer
+from cs336_basics.bpe_tokenizer import BPE_Tokenizer
 
 
 def run_linear(
@@ -593,6 +593,6 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     from ..cs336_basics.bpe_tokenizer import BPE_Tokenizer
-    tokenizer = BPE_Tokenizer(str(input_path), vocab_size, special_tokens)
-    tokenizer.pretokenize()
-    return tokenizer.train()
+    tokenizer = BPE_Tokenizer()
+    tokenizer.train_from_file(input_path, vocab_size, special_tokens)
+    return tokenizer.vocab, tokenizer.merges

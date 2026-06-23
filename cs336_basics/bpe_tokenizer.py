@@ -124,29 +124,25 @@ class BPE_Tokenizer:
         
         for pretoken in unique_pretokens:
             pretoken_byte = pretoken.encode("utf-8")
-            if pretoken in self.special_tokens:
+            if self.special_tokens is not None and pretoken in self.special_tokens:
                 pretoken_expression[pretoken] = [pretoken_byte]
             else:
                 pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))]
         
         # Apply merges to each expression with priority
-        while True:
-            flag = False
-            for pretoken, expression in pretoken_expression.items():
-                for merge in self.merges:
-                    new_expression = []
-                    i = 0
-                    while i < len(expression):
-                        if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                            new_expression.append(expression[i]+expression[i+1])
-                            flag = True
-                            i += 2
-                        else:
-                            new_expression.append(expression[i])
-                            i += 1
-                    pretoken_expression[pretoken] = new_expression
-            if not flag:
-                break
+        for pretoken, expression in pretoken_expression.items():
+            for merge in self.merges:
+                new_expression = []
+                i = 0
+                while i < len(expression):
+                    if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
+                        new_expression.append(expression[i]+expression[i+1])
+                        flag = True
+                        i += 2
+                    else:
+                        new_expression.append(expression[i])
+                        i += 1
+                pretoken_expression[pretoken] = new_expression
     
         for pretoken in pretokenized_text:
             for token in pretoken_expression[pretoken]:
