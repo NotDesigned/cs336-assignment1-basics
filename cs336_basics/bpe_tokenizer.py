@@ -1,6 +1,6 @@
 from typing import Iterable
 
-from .pretokenization import pretokenize, text_pretokenize
+from cs336_basics.pretokenization import pretokenize, text_pretokenize
 from collections import Counter
 
 class BPE_Tokenizer:
@@ -18,7 +18,9 @@ class BPE_Tokenizer:
         self.reverse_vocab = {v:k for k,v in vocab.items()}
 
     def train_from_file(self, file_path:str, vocab_size: int, special_tokens: list[str]):
+        print("Pretokenizing...")
         self.pretokenize(file_path, special_tokens)
+        print("End of pretokenization, start training...")
         vocab, merges = self.train(vocab_size, special_tokens)
         self.from_vocab_merges(vocab, merges, special_tokens)
     
@@ -26,24 +28,25 @@ class BPE_Tokenizer:
         self.count = pretokenize(file_path, special_tokens=special_tokens)
      
     def train(self, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-        """
+        """v
         Train the Tokenizer and return the vocab and merges
         """
         
         # Initialize with special tokens and 256 byte values
         id = 0
         vocab:dict[int, bytes] = {}
-        for s in special_tokens:
-            vocab[id] = s.encode("utf-8")
-            id += 1
         for i in range(256):
             vocab[id] = bytes([i])
+            id += 1
+        for s in special_tokens:
+            vocab[id] = s.encode("utf-8")
             id += 1
         merges: list[tuple[bytes, bytes]] = []
         # Calculate inital freq and current expression
         
         freq = Counter()
         current_expression: dict[str, list[bytes]] = dict()
+        appear: dict[tuple[bytes,bytes], set[str]] = {}
         for pretokens in self.count:
             count = self.count[pretokens]
             _by = pretokens.encode("utf-8")
@@ -51,12 +54,16 @@ class BPE_Tokenizer:
             # Build global counter for each vocal                
             for i in range(len(_by)-1):
                 freq[(bytes([_by[i]]),bytes([_by[i+1]]))] += count
+                if not (bytes([_by[i]]),bytes([_by[i+1]])) in appear:
+                    appear[(bytes([_by[i]]),bytes([_by[i+1]]))] = set()
+                appear[(bytes([_by[i]]),bytes([_by[i+1]]))].add(pretokens)
 
             # Build local expression for each pretoken
             for i in range(len(_by)):
                 if not pretokens in current_expression:
                     current_expression[pretokens] = []
                 current_expression[pretokens].append(bytes([_by[i]]))
+        
         
         # Merges
         while True:
@@ -82,27 +89,45 @@ class BPE_Tokenizer:
             id += 1
             
             # Rebuild
-            freq = Counter()
-            for pretokens, symbol_sequence in current_expression.items():
+            # for pretokens, symbol_sequence in current_expression.items():
+            tmp = appear[(target[0],target[1])].copy()
+            for pretokens in tmp:
+                symbol_sequence = current_expression[pretokens]
                 newsymbol_sequence = []
-                i = 0 
                 pretoken_count = self.count[pretokens]
 
+                for i in range(len(symbol_sequence)-1):
+                    freq[(symbol_sequence[i], symbol_sequence[i+1])] -= pretoken_count
+                    if not (symbol_sequence[i], symbol_sequence[i+1]) in appear:
+                        continue 
+                    if pretokens in appear[(symbol_sequence[i],symbol_sequence[i+1])]:
+                        appear[((symbol_sequence[i],symbol_sequence[i+1]))].remove(pretokens)
+                    if len(appear[(symbol_sequence[i],symbol_sequence[i+1])]) == 0:
+                        del appear[(symbol_sequence[i],symbol_sequence[i+1])]
+                    
+                i = 0 
                 while i < len(symbol_sequence):
-                    if i+1 < len(symbol_sequence) and symbol_sequence[i] == target[0] and symbol_sequence[i+1] == target[1]:
-                        newsymbol_sequence.append(merged)
-                        i += 2
+                    if i+1 < len(symbol_sequence):
+                        if symbol_sequence[i] == target[0] and symbol_sequence[i+1] == target[1]:
+                            newsymbol_sequence.append(merged)
+                            i += 2
+                        else:
+                            newsymbol_sequence.append(symbol_sequence[i])
+                            i += 1
                     else:
                         newsymbol_sequence.append(symbol_sequence[i])
                         i += 1
+                
+                for i in range(len(newsymbol_sequence)-1):
+                    if not (newsymbol_sequence[i],newsymbol_sequence[i+1]) in appear:
+                        appear[(newsymbol_sequence[i],newsymbol_sequence[i+1])] = set()
+                    appear[(newsymbol_sequence[i],newsymbol_sequence[i+1])].add(pretokens)
+                    freq[(newsymbol_sequence[i], newsymbol_sequence[i+1])] += pretoken_count
                         
                 current_expression[pretokens] = newsymbol_sequence
-
-                i = 0
-                while i < len(newsymbol_sequence) - 1:
-                    freq[(newsymbol_sequence[i], newsymbol_sequence[i+1])] += pretoken_count
-                    i += 1
             
+            freq += Counter() # remove 0 
+             
             # print(freq)
             # print(current_expression)
             
@@ -231,3 +256,11 @@ class BPE_Tokenizer:
             pieces.append(self.vocab[token])
         ret: bytes = b"".join(pieces)
         return ret.decode("utf-8",errors="ignore")
+
+if __name__ == "__main__":
+    s = BPE_Tokenizer()
+    s.train_from_file("data/TinyStoriesV2-GPT4-train.txt", 10000, ['<|endoftext|>'])
+
+    with open("data/test.out", "w") as f:
+        f.write(str(s.vocab))
+        f.write(str(s.merges))
