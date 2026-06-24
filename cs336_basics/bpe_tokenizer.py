@@ -28,7 +28,7 @@ class BPE_Tokenizer:
         self.count = pretokenize(file_path, special_tokens=special_tokens)
      
     def train(self, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-        """v
+        """
         Train the Tokenizer and return the vocab and merges
         """
         
