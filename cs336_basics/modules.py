@@ -1,6 +1,11 @@
+import math
+from typing import Optional
+
 import torch
 import torch.nn as nn
 from einops import rearrange, einsum
+from torch import Tensor
+from jaxtyping import Bool, Float, Int
 import einx
 
 class Linear(nn.Module):
@@ -9,7 +14,7 @@ class Linear(nn.Module):
         self.parameter = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype, device=device))
         nn.init.trunc_normal_(self.parameter, a=-3, b=3)
     
-    def forward(self, x : torch.Tensor) -> torch.Tensor:
+    def forward(self, x : Tensor) -> Tensor:
         return einx.dot("b ... i, o i -> b ... o", x, self.parameter)
 
 class Embedding(nn.Module):
@@ -20,7 +25,7 @@ class Embedding(nn.Module):
         self.parameter = nn.Parameter(torch.empty(num_embedding, embedding_dim, dtype=dtype, device=device))
         nn.init.trunc_normal_(self.parameter, a=-3, b=3)
     
-    def forward(self, token_ids: torch.LongTensor) -> torch.Tensor:
+    def forward(self, token_ids: torch.LongTensor) -> Tensor:
         return self.parameter[token_ids]
 
 class RMSNorm(nn.Module):
@@ -30,7 +35,7 @@ class RMSNorm(nn.Module):
         self.parameter = nn.Parameter(torch.empty(d_model, dtype=dtype, device=device))
         nn.init.trunc_normal_(self.parameter, a=-3, b=3)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor: 
+    def forward(self, x: Tensor) -> Tensor: 
         in_dtype=x.dtype
         x = x.float()
         
@@ -42,7 +47,7 @@ class SiLU(nn.Module):
     def __init__(self):
         super().__init__()
     
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
+    def forward(self, x:Tensor) -> Tensor:
         return x * torch.sigmoid(x)
 
 class SwiGLU(nn.Module):
@@ -57,7 +62,7 @@ class SwiGLU(nn.Module):
         nn.init.trunc_normal_(self.w2, a=-3, b=3)
         nn.init.trunc_normal_(self.w3, a=-3, b=3)
     
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: Tensor):
         return einx.dot("b ... d_ff, d_model d_ff -> b ... d_model", 
             self.silu(einx.dot("b ... d_model, d_ff d_model -> b ... d_ff", x, self.w1)) * 
             einx.dot("b ... d_model, d_ff d_model -> b ... d_ff", x, self.w3), 
@@ -87,15 +92,15 @@ class RotaryPositionalEmbedding(nn.Module):
         self.register_buffer("sin_freq", sin, persistent=False)
         self.register_buffer("cos_freq", cos, persistent=False)
     
-    def forward(self, x: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor, position: Tensor) -> Tensor:
         """
 
         Args:
-            x (torch.Tensor): Float[Tensor, "... sequence_length d_k"]
-            position (torch.Tensor): Int[Tensor, "... sequence_length"]
+            x (Tensor): Float[Tensor, "... sequence_length d_k"]
+            position (Tensor): Int[Tensor, "... sequence_length"]
 
         Returns:
-            torch.Tensor: Float[Tensor, "... sequence_length d_k"]
+            Tensor: Float[Tensor, "... sequence_length d_k"]
         """
         
         x_even = x[...,0::2]
@@ -111,3 +116,51 @@ class RotaryPositionalEmbedding(nn.Module):
         x_rot[..., 0::2] = x_rot_even
         x_rot[..., 1::2] = x_rot_odd
         return x_rot
+
+def Softmax(x: Tensor, dim:int):
+    # Subtract the maximum according dim i.
+    max_element =  x.amax(dim, keepdim=True)
+    
+    exp_x = torch.exp(x-max_element)
+    
+    ret = exp_x / exp_x.sum(dim=dim, keepdim=True)
+    return ret 
+
+def scaled_dot_product_attention(x_q:Float[Tensor, "B ... Q D_k"], x_k:Float[Tensor, "B ... K D_k"], 
+                                 x_v:Float[Tensor, "B ... K D_v"], mask:Optional[Bool[Tensor, "B ... Q K"]]):
+    d_k = x_q.shape[-1]
+    score = einx.dot("B ... Q [D_k], B ... K [D_k] -> B ... Q K", x_q, x_k) / math.sqrt(d_k)
+    if mask is not None:
+        score.masked_fill_(~mask, -torch.inf)
+    score = Softmax(score, dim=-1)
+    ret = einx.dot("B ... Q [K], B ... [K] D_v -> B ... Q D_v", score, x_v)
+    return ret
+
+class MultiHead_Self_Attention(nn.Module):
+    def __init__(self, d_model:int, num_heads:int, rope: Optional[RotaryPositionalEmbedding] = None, device:torch.device | None = None, dtype: torch.dtype | None = None):
+        super().__init__()
+        assert d_model % num_heads == 0
+        d_k = d_v = d_model // num_heads
+        self.W_Q = nn.Parameter(torch.empty((d_k*num_heads, d_model), device=device, dtype=dtype))
+        self.W_K = nn.Parameter(torch.empty((d_k*num_heads, d_model), device=device, dtype=dtype))
+        self.W_V = nn.Parameter(torch.empty((d_v*num_heads, d_model), device=device, dtype=dtype))
+        self.W_O = nn.Parameter(torch.empty((d_model, d_v*num_heads), device=device, dtype=dtype))
+        self.num_heads=num_heads
+        self.d_model = d_model
+        self.rope=rope
+    
+    def forward(self, x: Float[Tensor, "B ... S D"], token_positions:Optional[Tensor]=None):
+        Q = einx.dot("B ... S [D], (H d_k) [D] -> (B H) ... S d_k", x, self.W_Q, H=self.num_heads)
+        K = einx.dot("B ... S [D], (H d_k) [D] -> (B H) ... S d_k", x, self.W_K, H=self.num_heads)
+        V = einx.dot("B ... S [D], (H d_v) [D] -> (B H) ... S d_v", x, self.W_V, H=self.num_heads)
+        S = x.shape[-2]
+        mask = torch.tril(torch.ones(S, S, dtype=torch.bool)) # Q \times K , k <= q. 
+        if self.rope is not None:
+            if token_positions is None:
+                token_positions = torch.arange(0, S, device=x.device)
+            Q = self.rope(Q, token_positions)
+            K = self.rope(K, token_positions)
+        ret = scaled_dot_product_attention(Q, K, V, mask=mask)
+        ret = einx.id("(B H) ... S d_v -> B ... S (H d_v)", ret, H=self.num_heads)
+        ret = einx.dot("B ... S D2, D D2-> B ... S D", ret, self.W_O)
+        return ret
