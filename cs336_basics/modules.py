@@ -106,6 +106,7 @@ class RotaryPositionalEmbedding(nn.Module):
         x_even = x[...,0::2]
         x_odd = x[...,1::2]
         
+        # "position d_k"
         cos = self.cos_freq[position]
         sin = self.sin_freq[position]
         
@@ -164,3 +165,26 @@ class MultiHead_Self_Attention(nn.Module):
         ret = einx.id("(B H) ... S d_v -> B ... S (H d_v)", ret, H=self.num_heads)
         ret = einx.dot("B ... S D2, D D2-> B ... S D", ret, self.W_O)
         return ret
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model:int, num_heads:int, d_ff:int, theta:float = 10000, max_seq_len:int = 1024, device:torch.device | None = None, dtype: torch.dtype | None = None):
+        """
+        Args:
+            d_model (int): Dimensionality of embedding in attention
+            num_heads (int): Number of heads in the multihead attention
+            d_ff (int): Dim of FeedForward inner network
+        """
+        super().__init__()
+        assert d_model % num_heads == 0
+        d_k = d_model // num_heads
+        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.rope = RotaryPositionalEmbedding(theta=theta, d_k=d_k, max_seq_len=max_seq_len, device=device)
+        self.attn = MultiHead_Self_Attention(d_model, num_heads, rope=self.rope, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        
+    def forward(self, x: Float[Tensor, "B ... S D"]) -> Tensor:
+        # PreNorm
+        y = self.attn(self.norm1(x)) + x
+        y = self.ffn(self.norm2(y)) + y
+        return y
