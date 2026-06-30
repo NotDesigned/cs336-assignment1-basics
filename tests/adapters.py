@@ -31,7 +31,7 @@ def run_linear(
     """
 
     model = Linear(d_in, d_out)
-    model.load_state_dict({"parameter":weights})
+    model.load_state_dict({"weight":weights})
     return model(in_features)
 
 def run_embedding(
@@ -54,7 +54,7 @@ def run_embedding(
     """
 
     model = Embedding(vocab_size, d_model)
-    model.load_state_dict({"parameter":weights})
+    model.load_state_dict({"weight":weights})
     return model(token_ids)
 
 
@@ -89,9 +89,9 @@ def run_swiglu(
     # swiglu.w3.weight.data = w3_weight
     swiglu = SwiGLU(d_model=d_model, d_ff=d_ff)
     swiglu.load_state_dict({
-        "w1": w1_weight,
-        "w2": w2_weight,
-        "w3": w3_weight
+        "w1.weight": w1_weight,
+        "w2.weight": w2_weight,
+        "w3.weight": w3_weight
     })
     return swiglu(in_features)
 
@@ -150,10 +150,10 @@ def run_multihead_self_attention(
     """
     model=MultiHead_Self_Attention(d_model, num_heads)
     model.load_state_dict({
-        "W_Q": q_proj_weight,
-        "W_K": k_proj_weight,
-        "W_V": v_proj_weight,
-        "W_O": o_proj_weight
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "o_proj.weight": o_proj_weight
     })
     return model(in_features)
 
@@ -198,10 +198,10 @@ def run_multihead_self_attention_with_rope(
     rope = RotaryPositionalEmbedding(theta, d_model//num_heads, max_seq_len)
     model = MultiHead_Self_Attention(d_model, num_heads, rope)
     model.load_state_dict({
-        "W_Q": q_proj_weight,
-        "W_K": k_proj_weight,
-        "W_V": v_proj_weight,
-        "W_O": o_proj_weight
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "o_proj.weight": o_proj_weight
     })
     return model(in_features, token_positions)
 
@@ -301,17 +301,7 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     model = TransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len)
-    model.load_state_dict({
-        'attn.W_Q':weights['attn.q_proj.weight'],
-        'attn.W_K':weights['attn.k_proj.weight'],
-        'attn.W_V':weights['attn.v_proj.weight'],
-        'attn.W_O':weights['attn.output_proj.weight'],
-        'norm1.parameter': weights['ln1.weight'],
-        'norm2.parameter': weights['ln2.weight'],
-        'ffn.w1':weights['ffn.w1.weight'],
-        'ffn.w2':weights['ffn.w2.weight'],
-        'ffn.w3':weights['ffn.w3.weight']
-    })
+    model.load_state_dict(weights)
     return model(in_features)
 
 
@@ -394,8 +384,17 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
-
+    model = TransformerLM(
+        vocab_size=vocab_size, 
+        num_layers=num_layers,
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        content_length=context_length,
+        rope_theta=rope_theta,
+    )
+    model.load_state_dict(weights)
+    return model(in_indices)
 
 def run_rmsnorm(
     d_model: int,
