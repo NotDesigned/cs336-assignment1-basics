@@ -189,6 +189,7 @@ class TransformerBlock(nn.Module):
         y = self.attn(self.ln1(x)) + x
         y = self.ffn(self.ln2(y)) + y
         return y
+
 class TransformerLM(nn.Module):
     def __init__(self, vocab_size:int, num_layers:int, d_model:int, num_heads:int, d_ff:int, content_length:int, rope_theta:float = 10000, device:torch.device | None = None, dtype: torch.dtype | None = None):
         super().__init__()
@@ -202,5 +203,35 @@ class TransformerLM(nn.Module):
 
     def forward(self, token_indices:Int[Tensor, "B S"]) -> Float[Tensor, "B S V"]:
         embeddings = self.token_embeddings(token_indices)
-        ret = self.layers(embeddings)
-        return self.lm_head(self.ln_final(ret))
+        ret = self.layers(embeddings) # B S D
+        return self.lm_head(self.ln_final(ret)) # B S D, V D -> B S V
+
+def calc_params_flops(V:int,S:int,L:int,D:int,H:int,D_:int) -> tuple[int, int, dict, dict]:
+    # for flops, each transformer block is 6 SDD' + 8 SD^2 + 4 S^2D
+    flops = L*(6*S*D*D_+8*S*D*D+4*S*S*D)
+    # output embedding
+    flops += 2*S*D*V
+    # We ignore token embedding and softmax for flops calculation
+    
+    # transformer blocks
+    params = L* (
+        2 * D # 2*RMSNorm
+        + 0 # rope has no params
+        + 4 * D*D
+        + 3 * D*D_ # SwiGLU
+    )
+    # Token embedding
+    params += V*D
+    # Final Norm, linear projection
+    params += D + D*V
+    full_params = {
+        'FFN': 3* L * D * D_,
+        'Attention': 4 * L* D*D,
+        'Embeddings': 2 *D*V
+    }
+    full_flops = {
+        'FFN': L * 6 * D * D_ * S,
+        'Attention': L * (8 * S * D * D + 4 * S * S * D)
+    }
+    return params, flops, full_params, full_flops
+
