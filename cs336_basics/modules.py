@@ -235,3 +235,17 @@ def calc_params_flops(V:int,S:int,L:int,D:int,H:int,D_:int) -> tuple[int, int, d
     }
     return params, flops, full_params, full_flops
 
+def cross_entropy(logits:Float[Tensor, "B S V"],  target_index: Int[Tensor , "B S"], reduction:str = "mean"):
+    logsumexp = torch.logsumexp(logits, dim=-1)
+    target_logits = torch.gather(
+        input=logits,
+        dim = -1,
+        index= target_index.unsqueeze(-1)
+    ).squeeze(-1)
+    loss = logsumexp - target_logits
+    if reduction == "mean":
+        return loss.mean()
+    elif reduction == "sum":
+        return loss.sum()
+    else:
+        raise NotImplementedError
