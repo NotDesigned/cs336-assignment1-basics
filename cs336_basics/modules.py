@@ -310,3 +310,20 @@ class AdamW(torch.optim.Optimizer):
                 state["v"] = v
 
         return loss
+
+def get_lr_(t:int, lr_min, lr_max, warmup_iter, final_iter)->float:
+    if t < warmup_iter:
+        return t/warmup_iter * lr_max
+    if t > final_iter:
+        return lr_min 
+    return lr_min + 0.5 * (1 + math.cos(math.pi*(t-warmup_iter)/(final_iter-warmup_iter))) * (lr_max-lr_min)
+
+def grad_clip(params:Iterable[nn.Parameter], max_l2_norm:float, eps:float = 1e-6):
+    
+    params = [p for p in params if p.grad is not None]
+    norm_l2 = math.sqrt(sum(torch.sum(p.grad.detach()**2) for p in params))
+    
+    if norm_l2 >= max_l2_norm:
+        with torch.no_grad():
+            for p in params:
+                p.grad.mul_(max_l2_norm/(eps+norm_l2))
