@@ -296,13 +296,13 @@ class AdamW(torch.optim.Optimizer):
                 m = state.get("m", 0)
                 v = state.get("v", 0)
                 grad = p.grad
-                m = beta1 * m + (1-beta1) * grad
-                v = beta2 * v + (1-beta2) * grad * grad
-                alpha:float = lr * math.sqrt(1-beta2**t) / (1-beta1**t)
+                m = beta1 * m + (1-beta1) * grad # 2P
+                v = beta2 * v + (1-beta2) * grad * grad # 3P 
+                alpha:float = lr * math.sqrt(1-beta2**t) / (1-beta1**t) 
                 update = alpha * m / (v.sqrt() + eps)
                 assert isinstance(p, Tensor)
                 with torch.no_grad():
-                    p.add_(-lr*weight_decay*p)
+                    p.mul_(1-lr*weight_decay)
                     p.add_(-update)
 
                 state["t"] = t + 1
