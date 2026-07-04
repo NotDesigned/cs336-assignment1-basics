@@ -232,18 +232,18 @@ class BPE_Tokenizer:
                 else:
                     pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))] 
 
-            expression = pretoken_expression[pretoken]
-            for merge in self.merges:
-                new_expression = []
-                i = 0
-                while i < len(expression):
-                    if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                        new_expression.append(expression[i]+expression[i+1])
-                        i += 2
-                    else:
-                        new_expression.append(expression[i])
-                        i += 1
-                expression = pretoken_expression[pretoken] = new_expression
+                expression = pretoken_expression[pretoken]
+                for merge in self.merges:
+                    new_expression = []
+                    i = 0
+                    while i < len(expression):
+                        if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
+                            new_expression.append(expression[i]+expression[i+1])
+                            i += 2
+                        else:
+                            new_expression.append(expression[i])
+                            i += 1
+                    expression = pretoken_expression[pretoken] = new_expression
             
             for token in pretoken_expression[pretoken]:
                 yield self.reverse_vocab[token]
