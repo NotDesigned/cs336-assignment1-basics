@@ -2,6 +2,8 @@ import math
 from typing import Iterable, Optional, Callable
 from collections import OrderedDict
 
+import numpy as np
+import numpy.typing as npt
 import torch
 import torch.nn as nn
 from einops import rearrange, einsum
@@ -327,3 +329,19 @@ def grad_clip(params:Iterable[nn.Parameter], max_l2_norm:float, eps:float = 1e-6
         with torch.no_grad():
             for p in params:
                 p.grad.mul_(max_l2_norm/(eps+norm_l2))
+                
+def get_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+
+def data_load(token_ids: npt.NDArray[np.int16], batch_size:int, context_length:int, device_str:Optional[str]) -> tuple[Int[Tensor, "B S"], Int[Tensor, "B S"]]:
+    device = get_device() if device_str is None else torch.device(device_str)
+    tokens = torch.as_tensor(token_ids, dtype=torch.long, device=device)
+    start_index = torch.randint(low=0, high=len(token_ids)-context_length, size=(batch_size, ), device=device)
+    idx = start_index[:, None] + torch.arange(context_length+1, device=device)[None, :]
+    tmp = tokens[idx]
+    return tmp[...,  : -1], tmp[..., 1:]
