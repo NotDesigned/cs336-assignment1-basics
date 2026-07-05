@@ -75,7 +75,9 @@ class BPE_Tokenizer:
             
             # print("Before Merged:\n", freq)
             
-            target, count = freq.most_common(1)[0]
+            count = freq.most_common(1)[0][1]
+
+            target = sorted([a for a,b in freq.items() if b==count], reverse=True)[0]
             
             # print("Merging:", target)
 
@@ -214,8 +216,9 @@ class BPE_Tokenizer:
 
             buffer += suffix
 
-        yield buffer
-                
+        ret = text_pretokenize(buffer, special_tokens=self.special_tokens) 
+        for s in ret:
+            yield s
     
     def encode_iterable(self, f: Iterable[str]):
         """stream through the iterable and yield token
@@ -259,8 +262,10 @@ class BPE_Tokenizer:
 
 if __name__ == "__main__":
     s = BPE_Tokenizer()
-    s.train_from_file("data/TinyStoriesV2-GPT4-train.txt", 10000, ['<|endoftext|>'])
+    s.special_tokens = ['<|endoftext|>']
+    print(list(s.pretoken_iterable("foo<")))
+    # s.train_from_file("data/TinyStoriesV2-GPT4-train.txt", 10000, ['<|endoftext|>'])
 
-    with open("data/test.out", "w") as f:
-        f.write(str(s.vocab))
-        f.write(str(s.merges))
+    # with open("data/test.out", "w") as f:
+        # f.write(str(s.vocab))
+        # f.write(str(s.merges))
