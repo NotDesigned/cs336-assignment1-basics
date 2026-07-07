@@ -8,14 +8,16 @@ class BPE_Tokenizer:
         self.count: Counter = Counter()
         self.vocab: dict[int, bytes] = {}
         self.merges: list[tuple[bytes, bytes]] = [] 
+        self.merge_ranks: dict[tuple[bytes,bytes], int] = {}
         self.special_tokens = []
         self.reverse_vocab: dict[bytes, int] = {}
     
     def from_vocab_merges(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None):
         self.vocab = vocab
-        self.merges = merges
         self.special_tokens = sorted(set(special_tokens), reverse=True) if special_tokens is not None else None
         self.reverse_vocab = {v:k for k,v in vocab.items()}
+        self.merges = merges
+        self.merge_ranks = {a:i for a,i in zip(merges, range(len(merges)))}
 
     def train_from_file(self, file_path:str, vocab_size: int, special_tokens: list[str]):
         print("Pretokenizing...")
@@ -160,17 +162,21 @@ class BPE_Tokenizer:
         
         # Apply merges to each expression with priority
         for pretoken, expression in pretoken_expression.items():
-            for merge in self.merges:
-                new_expression = []
-                i = 0
-                while i < len(expression):
-                    if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                        new_expression.append(expression[i]+expression[i+1])
-                        i += 2
-                    else:
-                        new_expression.append(expression[i])
-                        i += 1
-                expression = pretoken_expression[pretoken] = new_expression
+            while True:
+                minval = 100000000
+                minarg:int = -1
+                for i in range(len(expression)-1):
+                    if (expression[i], expression[i+1]) in self.merges:
+                        if self.merge_ranks[(expression[i], expression[i+1])] < minval:
+                            minval = self.merge_ranks[(expression[i], expression[i+1])]
+                            minarg = i
+                
+                if minarg == -1:
+                    break
+
+                expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
+                
+            pretoken_expression[pretoken] = expression 
     
         for pretoken in pretokenized_text:
             for token in pretoken_expression[pretoken]:
@@ -237,17 +243,33 @@ class BPE_Tokenizer:
                     pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))] 
 
                 expression = pretoken_expression[pretoken]
-                for merge in self.merges:
-                    new_expression = []
-                    i = 0
-                    while i < len(expression):
-                        if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                            new_expression.append(expression[i]+expression[i+1])
-                            i += 2
-                        else:
-                            new_expression.append(expression[i])
-                            i += 1
-                    expression = pretoken_expression[pretoken] = new_expression
+                while True:
+                    minval = 100000000
+                    minarg:int = -1
+                    for i in range(len(expression)-1):
+                        if (expression[i], expression[i+1]) in self.merges:
+                            if self.merge_ranks[(expression[i], expression[i+1])] < minval:
+                                minval = self.merge_ranks[(expression[i], expression[i+1])]
+                                minarg = i
+                    
+                    if minarg == -1:
+                        break
+
+                    expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
+                    
+                pretoken_expression[pretoken] = expression 
+                        
+                # for merge in self.merges:
+                #     new_expression = []
+                #     i = 0
+                #     while i < len(expression):
+                #         if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
+                #             new_expression.append(expression[i]+expression[i+1])
+                #             i += 2
+                #         else:
+                #             new_expression.append(expression[i])
+                #             i += 1
+                #     expression = pretoken_expression[pretoken] = new_expression
             
             for token in pretoken_expression[pretoken]:
                 yield self.reverse_vocab[token]
