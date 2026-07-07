@@ -340,7 +340,7 @@ def get_device() -> torch.device:
     else:
         return torch.device("cpu")
 
-def data_load(token_ids: npt.NDArray[np.int16], batch_size:int, context_length:int, device_str:Optional[str]) -> tuple[Int[Tensor, "B S"], Int[Tensor, "B S"]]:
+def data_load(token_ids: npt.NDArray, batch_size:int, context_length:int, device_str:Optional[str]) -> tuple[Int[Tensor, "B S"], Int[Tensor, "B S"]]:
     device = get_device() if device_str is None else torch.device(device_str)
     tokens = torch.as_tensor(token_ids, dtype=torch.long, device=device)
     start_index = torch.randint(low=0, high=len(token_ids)-context_length, size=(batch_size, ), device=device)
