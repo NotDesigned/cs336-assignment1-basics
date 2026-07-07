@@ -141,6 +141,24 @@ class BPE_Tokenizer:
 
         return vocab, merges
     
+    def _merge_pretoken(self, old_expression:list[bytes]) -> list[bytes]:
+        expression = old_expression
+        while True:
+            minval = float('inf')
+            minarg:int = -1
+            for i in range(len(expression)-1):
+                if (expression[i], expression[i+1]) in self.merge_ranks:
+                    if self.merge_ranks[(expression[i], expression[i+1])] < minval:
+                        minval = self.merge_ranks[(expression[i], expression[i+1])]
+                        minarg = i
+            
+            if minarg == -1:
+                break
+
+            expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
+        return expression
+        
+    
     def encode(self, text: str) -> list[int]:
         # pretokenize the text, then byte each pretoken
         
@@ -162,21 +180,7 @@ class BPE_Tokenizer:
         
         # Apply merges to each expression with priority
         for pretoken, expression in pretoken_expression.items():
-            while True:
-                minval = 100000000
-                minarg:int = -1
-                for i in range(len(expression)-1):
-                    if (expression[i], expression[i+1]) in self.merges:
-                        if self.merge_ranks[(expression[i], expression[i+1])] < minval:
-                            minval = self.merge_ranks[(expression[i], expression[i+1])]
-                            minarg = i
-                
-                if minarg == -1:
-                    break
-
-                expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
-                
-            pretoken_expression[pretoken] = expression 
+            pretoken_expression[pretoken] = self._merge_pretoken(expression)
     
         for pretoken in pretokenized_text:
             for token in pretoken_expression[pretoken]:
@@ -242,34 +246,7 @@ class BPE_Tokenizer:
                 else:
                     pretoken_expression[pretoken] = [pretoken_byte[i:i+1] for i in range(len(pretoken_byte))] 
 
-                expression = pretoken_expression[pretoken]
-                while True:
-                    minval = 100000000
-                    minarg:int = -1
-                    for i in range(len(expression)-1):
-                        if (expression[i], expression[i+1]) in self.merges:
-                            if self.merge_ranks[(expression[i], expression[i+1])] < minval:
-                                minval = self.merge_ranks[(expression[i], expression[i+1])]
-                                minarg = i
-                    
-                    if minarg == -1:
-                        break
-
-                    expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
-                    
-                pretoken_expression[pretoken] = expression 
-                        
-                # for merge in self.merges:
-                #     new_expression = []
-                #     i = 0
-                #     while i < len(expression):
-                #         if i+1 < len(expression) and (expression[i], expression[i+1]) == merge:
-                #             new_expression.append(expression[i]+expression[i+1])
-                #             i += 2
-                #         else:
-                #             new_expression.append(expression[i])
-                #             i += 1
-                #     expression = pretoken_expression[pretoken] = new_expression
+                pretoken_expression[pretoken] = self._merge_pretoken(pretoken_expression[pretoken])
             
             for token in pretoken_expression[pretoken]:
                 yield self.reverse_vocab[token]
