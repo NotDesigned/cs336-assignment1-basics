@@ -5,6 +5,8 @@ from collections import Counter
 from itertools import repeat
 
 
+# ()是单独捕获到一个组里，?\p{L}+ 可选前导+连续字母（匹配空格用的）
+# \s 空白， \s+(?!\S) \S是非空白字符
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 def find_chunk_boundaries(

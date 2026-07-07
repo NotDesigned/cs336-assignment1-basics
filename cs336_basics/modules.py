@@ -1,6 +1,8 @@
 import math
+import os
 from typing import Iterable, Optional, Callable
 from collections import OrderedDict
+import typing
 
 import numpy as np
 import numpy.typing as npt
@@ -345,3 +347,18 @@ def data_load(token_ids: npt.NDArray[np.int16], batch_size:int, context_length:i
     idx = start_index[:, None] + torch.arange(context_length+1, device=device)[None, :]
     tmp = tokens[idx]
     return tmp[...,  : -1], tmp[..., 1:]
+
+def save_checkpoint(model:torch.nn.Module, optimizer:torch.optim.Optimizer, iteration:int, out:os.PathLike | typing.BinaryIO | str | typing.IO[bytes]):
+    d: dict = {
+        "model": model.state_dict(),
+        "optim": optimizer.state_dict(),
+        "iter": iteration
+    } 
+
+    torch.save(d, out)
+
+def load_checkpoint(src: os.PathLike | typing.BinaryIO | str | typing.IO[bytes], model:torch.nn.Module, optimizer:torch.optim.Optimizer) -> int:
+    d = torch.load(src)
+    model.load_state_dict(d["model"])
+    optimizer.load_state_dict(d["optim"])
+    return d['iter']
