@@ -9,7 +9,7 @@ from contextlib import nullcontext
 import time
 import torch
 from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
-from cs336_basics.bpe_tokenizer import BPE_Tokenizer
+from cs336_basics.tokenizer import BPE_Tokenizer
 from cs336_basics.modules import *
 import wandb
 import numpy as np
@@ -136,7 +136,7 @@ def main():
     
     target_step = args.train_step
 
-    peak = 56.28e12
+    peak = 56.28e12 # For my RTX5080
     bar = tqdm(range(step, target_step+1), desc="Training Step", initial=step - 1)
     with prof:
         for step in bar:

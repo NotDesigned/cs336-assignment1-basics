@@ -20,12 +20,9 @@ class BPE_Tokenizer:
         self.merge_ranks = {a:i for a,i in zip(merges, range(len(merges)))}
 
     def train_from_file(self, file_path:str, vocab_size: int, special_tokens: list[str]):
-        print("Pretokenizing...")
         self.pretokenize(file_path, special_tokens)
-        print("BPE tokenizer training...")
         vocab, merges = self.train(vocab_size, special_tokens)
         self.from_vocab_merges(vocab, merges, special_tokens)
-        print("Train Finished")
     
     def pretokenize(self, file_path:str, special_tokens: list[str] | None):
         self.count = pretokenize(file_path, special_tokens=special_tokens)
