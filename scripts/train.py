@@ -40,12 +40,13 @@ def parse_args():
     parser.add_argument("--weight-decay", default=0.1, type=float)
 
     parser.add_argument("--vocab-size", default=16384, type=int)
-    parser.add_argument("--num-heads", default=12, type=int)
-    parser.add_argument("--num-layers", default=24, type=int)
-    parser.add_argument("--d-model", default=512, type=int)
+    parser.add_argument("--num-heads", default=8, type=int)
+    parser.add_argument("--num-layers", default=16, type=int)
+    parser.add_argument("--d-model", default=384, type=int)
     parser.add_argument("--context-length", default=1024, type=int)
-    parser.add_argument("--batch-size", default=16, type=int)
+    parser.add_argument("--batch-size", default=2, type=int)
     parser.add_argument("--train-step", default=65536, type=int)
+    parser.add_argument("--grad-clip-norm", default=0.1, type=float)
     
     parser.add_argument("--val-every", default=100, type=int)
     parser.add_argument("--save-every", default=1000, type=int)
@@ -65,10 +66,12 @@ def parse_args():
 def main():
     
     args = parse_args() 
-    tk = get_tokenizer(args.train_data, args.vocab_size)
     
-    encode_to_bin(tk, args.train_data, 'train.bin')
-    encode_to_bin(tk, args.val_data, 'valid.bin')
+    if not os.path.exists("train.bin"):
+        tk = get_tokenizer(args.train_data, args.vocab_size)
+        encode_to_bin(tk, args.train_data, 'train.bin')
+        encode_to_bin(tk, args.val_data, 'valid.bin')
+
     train_data = np.memmap(filename='train.bin', dtype=np.int32, mode='r')
     valid_data = np.memmap(filename='valid.bin', dtype=np.int32, mode='r')
     
@@ -84,7 +87,7 @@ def main():
         d_ff=args.d_ff,
         content_length=args.context_length,
         device=device
-    )
+    ).to(device)
     optim = AdamW(model.parameters(), args.lr, (args.beta1, args.beta2), args.weight_decay)
     if args.resume:
         step = load_checkpoint(args.save, model, optim)
@@ -92,11 +95,12 @@ def main():
         step = 1
 
     target_step = args.train_step
-    for step in tqdm(range(1, target_step+1), desc="Training Step"):
+    for step in tqdm(range(step, target_step+1), desc="Training Step"):
         optim.zero_grad()
-        token, gt = data_load(token_ids=train_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None) 
+        token, gt = data_load(token_ids=train_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
         pred_logit = model(token)
         loss = cross_entropy(pred_logit, gt)
+        grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
         loss.backward()
         optim.step()
         if args.use_wandb:
@@ -104,16 +108,17 @@ def main():
                 "train_loss": float(loss)
             }, step = step)
         if step % args.val_every == 0:
-            val, val_gt = data_load(token_ids=valid_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None)
-            pred_logit = model(val)
-            loss = cross_entropy(pred_logit, val_gt) 
-            if args.use_wandb:
-                wandb.log(data={
-                    'val_loss': float(loss)
-                }, step=step)
+            with torch.no_grad():
+                model.eval()
+                val, val_gt = data_load(token_ids=valid_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
+                pred_logit = model(val)
+                loss = cross_entropy(pred_logit, val_gt) 
+                if args.use_wandb:
+                    wandb.log(data={
+                        'val_loss': float(loss)
+                    }, step=step)
         if step % args.save_every == 0:
             save_checkpoint(model, optim, step, args.save)
-        step += 1
 
 if __name__ == "__main__":
     main()

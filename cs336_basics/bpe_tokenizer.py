@@ -155,7 +155,7 @@ class BPE_Tokenizer:
             if minarg == -1:
                 break
 
-            expression = expression[:minarg] + [expression[minarg]+expression[minarg+1]] + expression[minarg+2:]
+            expression[minarg:minarg+2] = [expression[minarg]+expression[minarg+1]]
         return expression
         
     

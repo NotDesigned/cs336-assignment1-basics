@@ -59,9 +59,9 @@ class SwiGLU(nn.Module):
     def __init__(self, d_model:int, d_ff:int, device:torch.device | None = None, dtype: torch.dtype | None = None):
         super().__init__()
         self.d_ff = d_ff
-        self.w1 = Linear(d_model, d_ff) # nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
-        self.w2 = Linear(d_ff, d_model) # nn.Parameter(torch.empty(d_model, d_ff, device=device, dtype=dtype))
-        self.w3 = Linear(d_model, d_ff) # nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
+        self.w1 = Linear(d_model, d_ff, device, dtype) # nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
+        self.w2 = Linear(d_ff, d_model, device, dtype) # nn.Parameter(torch.empty(d_model, d_ff, device=device, dtype=dtype))
+        self.w3 = Linear(d_model, d_ff, device, dtype) # nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
         self.silu = SiLU()
         nn.init.trunc_normal_(self.w1.weight, a=-3, b=3)
         nn.init.trunc_normal_(self.w2.weight, a=-3, b=3)
@@ -160,7 +160,7 @@ class MultiHead_Self_Attention(nn.Module):
         K = einx.dot("B ... S [D], (H d_k) [D] -> (B H) ... S d_k", x, self.k_proj.weight, H=self.num_heads)
         V = einx.dot("B ... S [D], (H d_v) [D] -> (B H) ... S d_v", x, self.v_proj.weight, H=self.num_heads)
         S = x.shape[-2]
-        mask = torch.tril(torch.ones(S, S, dtype=torch.bool)) # Q \times K , k <= q. 
+        mask = torch.tril(torch.ones(S, S, dtype=torch.bool, device=x.device)) # Q \times K , k <= q. 
         if self.rope is not None:
             if token_positions is None:
                 token_positions = torch.arange(0, S, device=x.device)
@@ -340,12 +340,12 @@ def get_device() -> torch.device:
     else:
         return torch.device("cpu")
 
-def data_load(token_ids: npt.NDArray, batch_size:int, context_length:int, device_str:Optional[str]) -> tuple[Int[Tensor, "B S"], Int[Tensor, "B S"]]:
-    device = get_device() if device_str is None else torch.device(device_str)
-    tokens = torch.as_tensor(token_ids, dtype=torch.long, device=device)
-    start_index = torch.randint(low=0, high=len(token_ids)-context_length, size=(batch_size, ), device=device)
-    idx = start_index[:, None] + torch.arange(context_length+1, device=device)[None, :]
-    tmp = tokens[idx]
+def data_load(token_ids: npt.NDArray, batch_size:int, context_length:int, device_str:Optional[str]=None, device: Optional[torch.device]=None) -> tuple[Int[Tensor, "B S"], Int[Tensor, "B S"]]:
+    if device is None:
+        device = get_device() if device_str is None else torch.device(device_str)
+    start_index = np.random.randint(low=0, high=len(token_ids)-context_length, size=(batch_size, ))
+    idx = start_index[:, None] + np.arange(context_length+1)[None, :]
+    tmp = torch.as_tensor(token_ids[idx], dtype=torch.long, device=device)
     return tmp[...,  : -1], tmp[..., 1:]
 
 def save_checkpoint(model:torch.nn.Module, optimizer:torch.optim.Optimizer, iteration:int, out:os.PathLike | typing.BinaryIO | str | typing.IO[bytes]):
