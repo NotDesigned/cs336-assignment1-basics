@@ -167,3 +167,5 @@ data
 .vscode
 *.bin
 wandb
+log
+ckpt

@@ -5,7 +5,10 @@
 • Periodically logging training and validation performance (e.g., to console and/or an external
 service like Weights and Biases).
 """
+from contextlib import nullcontext
+import time
 import torch
+from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
 from cs336_basics.bpe_tokenizer import BPE_Tokenizer
 from cs336_basics.modules import *
 import wandb
@@ -35,16 +38,19 @@ def get_tokenizer(data_path:str, vocab_size:int, special_tokens: list[str] = ['<
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", default=1e-2, type=float)
+    parser.add_argument("--lr-min", default=1e-5, type=float)
+    parser.add_argument("--warmup-steps", default=100, type=int)
+
     parser.add_argument("--beta1", default=0.9, type=float)
     parser.add_argument("--beta2", default=0.99, type=float)
     parser.add_argument("--weight-decay", default=0.1, type=float)
 
     parser.add_argument("--vocab-size", default=16384, type=int)
-    parser.add_argument("--num-heads", default=8, type=int)
+    parser.add_argument("--num-heads", default=4, type=int)
     parser.add_argument("--num-layers", default=16, type=int)
     parser.add_argument("--d-model", default=384, type=int)
     parser.add_argument("--context-length", default=1024, type=int)
-    parser.add_argument("--batch-size", default=2, type=int)
+    parser.add_argument("--batch-size", default=4, type=int)
     parser.add_argument("--train-step", default=65536, type=int)
     parser.add_argument("--grad-clip-norm", default=0.1, type=float)
     
@@ -58,10 +64,23 @@ def parse_args():
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--wandb-project", default='basic_lm', type=str)
     parser.add_argument("--wandb-run", default='', type=str) # Gen by random by default
+
+    parser.add_argument("--profile", action="store_true")
     
     args = parser.parse_args()
     args.d_ff = round((8 / 3 * args.d_model) / 64) * 64
     return args
+
+def accounting(args):
+    params, flops, _, _ = calc_params_flops(
+        V=args.vocab_size,
+        S=args.context_length,
+        L=args.num_layers,
+        D=args.d_model,
+        H=args.num_heads,
+        D_=args.d_ff
+    )
+    return params, flops * args.batch_size * 3
 
 def main():
     
@@ -87,38 +106,96 @@ def main():
         d_ff=args.d_ff,
         content_length=args.context_length,
         device=device
-    ).to(device)
-    optim = AdamW(model.parameters(), args.lr, (args.beta1, args.beta2), args.weight_decay)
+    )
+    prof = profile(
+        activities=[
+            ProfilerActivity.CPU,
+            ProfilerActivity.CUDA
+        ],
+        schedule=schedule(
+            wait=5,
+            warmup=5,
+            active=10,
+            repeat=1
+        ),
+        on_trace_ready=tensorboard_trace_handler("log/profiler"),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+    ) if args.profile else nullcontext() 
+    # optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
+    optim = AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     if args.resume:
-        step = load_checkpoint(args.save, model, optim)
+        step = load_checkpoint(args.save, model, optim) + 1
+        print(f"Resume from step {step}")
     else:
         step = 1
+    params, flops = accounting(args)
 
+    print(f"Params: {params/1000**2} M, FLOPs: {flops/1000**3} GFLOPs")
+    
     target_step = args.train_step
-    for step in tqdm(range(step, target_step+1), desc="Training Step"):
-        optim.zero_grad()
-        token, gt = data_load(token_ids=train_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
-        pred_logit = model(token)
-        loss = cross_entropy(pred_logit, gt)
-        grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
-        loss.backward()
-        optim.step()
-        if args.use_wandb:
-            wandb.log(data={
-                "train_loss": float(loss)
-            }, step = step)
-        if step % args.val_every == 0:
-            with torch.no_grad():
-                model.eval()
-                val, val_gt = data_load(token_ids=valid_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
-                pred_logit = model(val)
-                loss = cross_entropy(pred_logit, val_gt) 
-                if args.use_wandb:
-                    wandb.log(data={
-                        'val_loss': float(loss)
-                    }, step=step)
-        if step % args.save_every == 0:
-            save_checkpoint(model, optim, step, args.save)
+
+    peak = 56.28e12
+    bar = tqdm(range(step, target_step+1), desc="Training Step", initial=step - 1)
+    with prof:
+        for step in bar:
+            token, gt = data_load(token_ids=train_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
+
+            lr = get_lr_(step, args.lr_min, args.lr, args.warmup_steps, args.train_step)
+            for group in optim.param_groups:
+                group["lr"] = lr
+
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            optim.zero_grad()
+            pred_logit = model(token)
+            loss = cross_entropy(pred_logit, gt)
+            loss.backward()
+            grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
+            optim.step()
+            
+            if args.profile:
+                prof.step()
+                if step >= 25:
+                    break
+            
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+            t1 = time.perf_counter()
+            dt = t1 - t0
+            MFU = flops / dt / peak
+            bar.set_postfix({"MFU":MFU, "loss": float(loss)})
+            
+            if args.use_wandb:
+                wandb.log(data={
+                    "train_loss": float(loss)
+                }, step = step)
+                
+            if step % args.val_every == 0:
+                with torch.no_grad():
+                    model.eval()
+                    val, val_gt = data_load(token_ids=valid_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
+                    pred_logit = model(val)
+                    loss = cross_entropy(pred_logit, val_gt) 
+                    if args.use_wandb:
+                        wandb.log(data={
+                            'val_loss': float(loss)
+                        }, step=step)
+                model.train()
+
+            if step % args.save_every == 0:
+                save_checkpoint(model, optim, step, args.save)
+                print(f"Save step {step}")
+                
+    if args.profile:
+        print(
+            prof.key_averages().table(
+                sort_by="self_cuda_time_total",
+                row_limit=20,
+            )
+        )
 
 if __name__ == "__main__":
     main()

@@ -20,6 +20,7 @@ dependencies = [
     "ty>=0.0.26",
     "ruff>=0.15.8",
     "matplotlib>=3.11.0",
+    "tensorboard>=2.21.0",
 ]
 
 [build-system]

@@ -147,10 +147,10 @@ class MultiHead_Self_Attention(nn.Module):
         super().__init__()
         assert d_model % num_heads == 0
         d_k = d_v = d_model // num_heads
-        self.q_proj = Linear(d_model, d_k*num_heads)  # nn.Parameter(torch.empty((d_k*num_heads, ), device=device, dtype=dtype))
-        self.k_proj = Linear(d_model, d_k*num_heads)  # nn.Parameter(torch.empty((d_k*num_heads, d_model), device=device, dtype=dtype))
-        self.v_proj = Linear(d_model, d_v*num_heads) # nn.Parameter(torch.empty((d_v*num_heads, d_model), device=device, dtype=dtype))
-        self.output_proj = Linear(d_v*num_heads, d_model) # nn.Parameter(torch.empty((d_model, d_v*num_heads), device=device, dtype=dtype))
+        self.q_proj = Linear(d_model, d_k*num_heads, device, dtype)  # nn.Parameter(torch.empty((d_k*num_heads, ), device=device, dtype=dtype))
+        self.k_proj = Linear(d_model, d_k*num_heads, device, dtype)  # nn.Parameter(torch.empty((d_k*num_heads, d_model), device=device, dtype=dtype))
+        self.v_proj = Linear(d_model, d_v*num_heads, device, dtype) # nn.Parameter(torch.empty((d_v*num_heads, d_model), device=device, dtype=dtype))
+        self.output_proj = Linear(d_v*num_heads, d_model, device, dtype) # nn.Parameter(torch.empty((d_model, d_v*num_heads), device=device, dtype=dtype))
         self.num_heads=num_heads
         self.d_model = d_model
         self.rope=rope
@@ -203,7 +203,7 @@ class TransformerLM(nn.Module):
             for i in range(num_layers)
         }))
         self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
-        self.lm_head = Linear(in_features=d_model, out_features=vocab_size)
+        self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device=device, dtype=dtype)
 
     def forward(self, token_indices:Int[Tensor, "B S"]) -> Float[Tensor, "B S V"]:
         embeddings = self.token_embeddings(token_indices)
