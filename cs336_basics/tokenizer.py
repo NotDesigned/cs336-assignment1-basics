@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Iterable
 
 from cs336_basics.pretokenization import pretokenize, text_pretokenize
@@ -12,12 +14,53 @@ class BPE_Tokenizer:
         self.special_tokens = []
         self.reverse_vocab: dict[bytes, int] = {}
     
+    def save(self, save_path: os.PathLike | str):
+        data = {
+            "vocab": {
+                str(token_id): list(token_bytes)
+                for token_id, token_bytes in self.vocab.items()
+            },
+            "merges": [
+                [list(a), list(b)]
+                for a, b in self.merges
+            ],
+            "special_tokens": self.special_tokens,
+        }
+
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    @classmethod
+    def load(cls, save_path: os.PathLike | str) -> "BPE_Tokenizer":
+        """
+        Load tokenizer from a JSON file.
+        """
+        with open(save_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        vocab = {
+            int(token_id): bytes(token_bytes)
+            for token_id, token_bytes in data["vocab"].items()
+        }
+
+        merges = [
+            (bytes(a), bytes(b))
+            for a, b in data["merges"]
+        ]
+
+        special_tokens = data.get("special_tokens", None)
+
+        tokenizer = cls()
+        tokenizer.from_vocab_merges(vocab, merges, special_tokens)
+        return tokenizer
+        
+    
     def from_vocab_merges(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None):
         self.vocab = vocab
-        self.special_tokens = sorted(set(special_tokens), reverse=True) if special_tokens is not None else None
+        self.special_tokens = sorted(set(special_tokens), reverse=True) if special_tokens is not None else []
         self.reverse_vocab = {v:k for k,v in vocab.items()}
         self.merges = merges
-        self.merge_ranks = {a:i for a,i in zip(merges, range(len(merges)))}
+        self.merge_ranks = {merge: rank for rank, merge in enumerate(merges)}
 
     def train_from_file(self, file_path:str, vocab_size: int, special_tokens: list[str]):
         self.pretokenize(file_path, special_tokens)
@@ -139,7 +182,7 @@ class BPE_Tokenizer:
         return vocab, merges
     
     def _merge_pretoken(self, old_expression:list[bytes]) -> list[bytes]:
-        expression = old_expression
+        expression = old_expression.copy()
         while True:
             minval = float('inf')
             minarg:int = -1
@@ -253,6 +296,8 @@ class BPE_Tokenizer:
     def decode(self, tokens: list[int]) -> str:
         pieces: list[bytes] = []
         for token in tokens:
+            if token == -1:
+                break
             pieces.append(self.vocab[token])
         ret: bytes = b"".join(pieces)
         return ret.decode("utf-8",errors="ignore")

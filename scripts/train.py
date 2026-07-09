@@ -32,7 +32,9 @@ def encode_to_bin(tokenizer, input_path, output_path, buffer_size= 1024**2):
 
 def get_tokenizer(data_path:str, vocab_size:int, special_tokens: list[str] = ['<|endoftext|>']):
     tokenizer = BPE_Tokenizer()
+    print("Training tokenizer")
     tokenizer.train_from_file(file_path=data_path, vocab_size=vocab_size, special_tokens=special_tokens)
+    print("Training finished")
     return tokenizer
 
 def parse_args():
@@ -56,7 +58,7 @@ def parse_args():
     
     parser.add_argument("--val-every", default=100, type=int)
     parser.add_argument("--save-every", default=1000, type=int)
-    parser.add_argument("--save", default='ckpt/save.ckpt', type=str)
+    parser.add_argument("--save-dir", default='save', type=str)
     parser.add_argument("--resume", action='store_true')
     parser.add_argument("--train-data", default='data/TinyStoriesV2-GPT4-train.txt',type=str)
     parser.add_argument("--val-data", default='data/TinyStoriesV2-GPT4-valid.txt',type=str)
@@ -85,9 +87,21 @@ def accounting(args):
 def main():
     
     args = parse_args() 
+
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
     
+    tk_save_path = os.path.join(args.save_dir, "tokenizer.json")
+    pt_save_path = os.path.join(args.save_dir, "save.pt")
+    
+    if not args.resume or not os.path.exists(tk_save_path):
+            tk = get_tokenizer(args.train_data, args.vocab_size)
+            tk.save(tk_save_path)
+        
+    tk = BPE_Tokenizer()
+    tk.load(os.path.join(args.save_dir, "tokenizer.json"))
+
     if not os.path.exists("train.bin"):
-        tk = get_tokenizer(args.train_data, args.vocab_size)
         encode_to_bin(tk, args.train_data, 'train.bin')
         encode_to_bin(tk, args.val_data, 'valid.bin')
 
@@ -126,7 +140,7 @@ def main():
     # optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     optim = AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     if args.resume:
-        step = load_checkpoint(args.save, model, optim) + 1
+        step = load_checkpoint(pt_save_path, model, optim) + 1
         print(f"Resume from step {step}")
     else:
         step = 1
@@ -186,7 +200,7 @@ def main():
                 model.train()
 
             if step % args.save_every == 0:
-                save_checkpoint(model, optim, step, args.save)
+                save_checkpoint(model, optim, step, pt_save_path)
                 print(f"Save step {step}")
                 
     if args.profile:
