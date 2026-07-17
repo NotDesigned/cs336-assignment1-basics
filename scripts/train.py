@@ -9,6 +9,7 @@ from contextlib import nullcontext
 import time
 import torch
 from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
+from cs336_basics.sample import test_completion
 from cs336_basics.tokenizer import BPE_Tokenizer
 from cs336_basics.modules import *
 import wandb
@@ -56,7 +57,7 @@ def parse_args():
     # parser.add_argument("--train-step", default=65536, type=int)
     parser.add_argument("--grad-clip-norm", default=0.1, type=float)
     
-    parser.add_argument("--val-every", default=100, type=int)
+    parser.add_argument("--val-every", default=500, type=int)
     parser.add_argument("--save-every", default=1000, type=int)
     parser.add_argument("--save-dir", default='save', type=str)
     parser.add_argument("--resume", action='store_true')
@@ -70,6 +71,17 @@ def parse_args():
     parser.add_argument("--wandb-run", default='', type=str) # Gen by random by default
 
     parser.add_argument("--profile", action="store_true")
+
+    parser.add_argument(
+        "--amp",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--amp-dtype",
+        default="bf16",
+        choices=["fp16", "bf16"]
+    )
     
     args = parser.parse_args()
     args.d_ff = round((8 / 3 * args.d_model) / 64) * 64
@@ -117,9 +129,24 @@ def main():
     valid_data = np.memmap(filename='valid.bin', dtype=np.int32, mode='r')
     
     device = get_device()
-    if args.use_wandb:
-        wandb.init(project=args.wandb_project, name=None if args.wandb_run == '' else args.wandb_run)
     
+    if args.amp:
+        if args.amp_dtype == "bf16":
+            amp_dtype = torch.bfloat16
+        else:
+            amp_dtype = torch.float16
+
+        if device.type == "cuda":
+            scaler = torch.amp.GradScaler(
+                device="cuda",
+                enabled=(amp_dtype == torch.float16)
+            )
+        else:
+            scaler = None
+    else:
+        amp_dtype = None
+        scaler = None
+        
     model = TransformerLM(
         vocab_size=args.vocab_size, 
         num_heads=args.num_heads,
@@ -148,24 +175,49 @@ def main():
     # optim = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     optim = AdamW(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     if args.resume:
-        step = load_checkpoint(pt_save_path, model, optim) + 1
+        step:int = load_checkpoint(pt_save_path, model, optim) + 1
         print(f"Resume from step {step}")
+        
+        if args.use_wandb:
+            checkpoint = torch.load(pt_save_path, map_location="cpu")
+            wandb_id = checkpoint.get("wandb_id", None)
+
+            if wandb_id is None:
+                raise RuntimeError(
+                    "Checkpoint does not contain wandb_id"
+                )
+
+            wandb.init(
+                project=args.wandb_project,
+                id=wandb_id,
+                resume="must"
+            )
     else:
-        step = 1
+        step:int = 1
+        if args.use_wandb:
+            wandb.init(
+                project=args.wandb_project,
+                name=None if args.wandb_run == '' else args.wandb_run
+            )
     params, flops = accounting(args)
 
     print(f"Params: {params/1000**2} M, FLOPs: {flops/1000**3} GFLOPs")
     
-    target_step = args.total_token / args.batch_size / args.context_length
+    target_step:int = args.total_token // (args.batch_size * args.context_length)
     print(f"Target Step: {target_step}")
 
-    peak = 56.28e12 # For my RTX5080
-    bar = tqdm(range(step, target_step+1), desc="Training Step", initial=step - 1)
+    if device.type == 'cuda':
+        peak = 56.28e12 # For my RTX5080, fp32
+    elif device.type == 'mps':
+        peak = 3.7e12 # fp32 
+    else:
+        raise RuntimeError("Expect cuda or mps device to calc mfu")
+    bar = tqdm(range(step, target_step+1), desc="Training Step", initial=step-1)
     with prof:
         for step in bar:
             token, gt = data_load(token_ids=train_data, batch_size=args.batch_size, context_length=args.context_length, device_str=None, device=device)
 
-            lr = get_lr_(step, args.lr_min, args.lr, args.warmup_steps, args.train_step)
+            lr = get_lr_(step, args.lr_min, args.lr, args.warmup_steps, target_step)
             for group in optim.param_groups:
                 group["lr"] = lr
 
@@ -175,11 +227,26 @@ def main():
                 torch.mps.synchronize()
             t0 = time.perf_counter()
             optim.zero_grad()
-            pred_logit = model(token)
-            loss = cross_entropy(pred_logit, gt)
-            loss.backward()
-            grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
-            optim.step()
+            if args.amp:
+                with torch.autocast(device_type=device.type, dtype=amp_dtype):
+                    pred_logit = model(token)
+                    loss = cross_entropy(pred_logit, gt)
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optim)
+                    grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
+                    scaler.step(optim)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
+                    optim.step()
+            else:
+                pred_logit = model(token)
+                loss = cross_entropy(pred_logit, gt) 
+                loss.backward()
+                grad_clip(model.parameters(), max_l2_norm=args.grad_clip_norm)
+                optim.step()
             
             if args.profile:
                 prof.step()
@@ -193,11 +260,11 @@ def main():
             t1 = time.perf_counter()
             dt = t1 - t0
             MFU = flops / dt / peak
-            bar.set_postfix({"MFU":MFU, "loss": float(loss)})
+            bar.set_postfix({"MFU":MFU, "loss": float(loss.detach())})
             
             if args.use_wandb:
                 wandb.log(data={
-                    "train_loss": float(loss)
+                    "train_loss": float(loss.detach())
                 }, step = step)
                 
             if step % args.val_every == 0:
@@ -208,12 +275,13 @@ def main():
                     loss = cross_entropy(pred_logit, val_gt) 
                     if args.use_wandb:
                         wandb.log(data={
-                            'val_loss': float(loss)
+                            'val_loss': float(loss.detach())
                         }, step=step)
+                    print(test_completion(model, prompt="Once a time, ", tokenizer=tk, max_generated=128, temperature=1, p = 0.5))
                 model.train()
 
             if step % args.save_every == 0:
-                save_checkpoint(model, optim, step, pt_save_path)
+                save_checkpoint(model, optim, step, pt_save_path, wandb.run.id if args.use_wandb else None)
                 print(f"Save step {step}")
                 
     if args.profile:

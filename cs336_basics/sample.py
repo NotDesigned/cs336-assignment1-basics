@@ -57,7 +57,7 @@ def chat_completion(model, prompt: Int[Tensor, "B S"], tk: BPE_Tokenizer, max_ge
     generated[~keep] = -1
     return generated
 
-def test_completion(model, prompt:str, tokenizer: BPE_Tokenizer, max_generated:int, temperature: float, p: Optional[float]):
+def test_completion(model, prompt:str, tokenizer: BPE_Tokenizer, max_generated:int, temperature: float, p: Optional[float]= None):
     tokens = tokenizer.encode(prompt)
     tokens = torch.as_tensor(tokens).unsqueeze(0)
     return tokenizer.decode(chat_completion(model, tokens, tokenizer, max_generated, temperature, p).squeeze(0).tolist())
