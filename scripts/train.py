@@ -48,20 +48,22 @@ def parse_args():
     parser.add_argument("--weight-decay", default=0.1, type=float)
 
     parser.add_argument("--vocab-size", default=16384, type=int)
-    parser.add_argument("--num-heads", default=4, type=int)
-    parser.add_argument("--num-layers", default=16, type=int)
-    parser.add_argument("--d-model", default=384, type=int)
-    parser.add_argument("--context-length", default=1024, type=int)
+    parser.add_argument("--num-heads", default=16, type=int)
+    parser.add_argument("--num-layers", default=4, type=int)
+    parser.add_argument("--d-model", default=512, type=int)
+    parser.add_argument("--context-length", default=256, type=int)
     parser.add_argument("--batch-size", default=4, type=int)
-    parser.add_argument("--train-step", default=65536, type=int)
+    # parser.add_argument("--train-step", default=65536, type=int)
     parser.add_argument("--grad-clip-norm", default=0.1, type=float)
     
     parser.add_argument("--val-every", default=100, type=int)
     parser.add_argument("--save-every", default=1000, type=int)
     parser.add_argument("--save-dir", default='save', type=str)
     parser.add_argument("--resume", action='store_true')
+    parser.add_argument("--train-tokenizer", action='store_true')
     parser.add_argument("--train-data", default='data/TinyStoriesV2-GPT4-train.txt',type=str)
     parser.add_argument("--val-data", default='data/TinyStoriesV2-GPT4-valid.txt',type=str)
+    parser.add_argument("--total-token", default=327680000, type=int)
 
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--wandb-project", default='basic_lm', type=str)
@@ -71,6 +73,7 @@ def parse_args():
     
     args = parser.parse_args()
     args.d_ff = round((8 / 3 * args.d_model) / 64) * 64
+    print(args)
     return args
 
 def accounting(args):
@@ -93,17 +96,22 @@ def main():
     
     tk_save_path = os.path.join(args.save_dir, "tokenizer.json")
     pt_save_path = os.path.join(args.save_dir, "save.pt")
+    print(f"{tk_save_path}, {os.path.exists(tk_save_path)}")
     
-    if not args.resume or not os.path.exists(tk_save_path):
-            tk = get_tokenizer(args.train_data, args.vocab_size)
-            tk.save(tk_save_path)
-        
-    tk = BPE_Tokenizer()
-    tk.load(os.path.join(args.save_dir, "tokenizer.json"))
+    if not os.path.exists(tk_save_path) or args.train_tokenizer:
+        print("Training tokenizer from scratch")
+        tk = get_tokenizer(args.val_data, args.vocab_size)
+        tk.save(tk_save_path)
+    else:
+        print("Resume tokenizer")
+        tk = BPE_Tokenizer().load(os.path.join(args.save_dir, "tokenizer.json"))
 
     if not os.path.exists("train.bin"):
         encode_to_bin(tk, args.train_data, 'train.bin')
         encode_to_bin(tk, args.val_data, 'valid.bin')
+        print("Encode data to bin")
+    else:
+        print("Use existing data bin")
 
     train_data = np.memmap(filename='train.bin', dtype=np.int32, mode='r')
     valid_data = np.memmap(filename='valid.bin', dtype=np.int32, mode='r')
@@ -148,7 +156,8 @@ def main():
 
     print(f"Params: {params/1000**2} M, FLOPs: {flops/1000**3} GFLOPs")
     
-    target_step = args.train_step
+    target_step = args.total_token / args.batch_size / args.context_length
+    print(f"Target Step: {target_step}")
 
     peak = 56.28e12 # For my RTX5080
     bar = tqdm(range(step, target_step+1), desc="Training Step", initial=step - 1)
@@ -162,6 +171,8 @@ def main():
 
             if device.type == 'cuda':
                 torch.cuda.synchronize()
+            elif device.type == 'mps':
+                torch.mps.synchronize()
             t0 = time.perf_counter()
             optim.zero_grad()
             pred_logit = model(token)
@@ -177,6 +188,8 @@ def main():
             
             if device.type == 'cuda':
                 torch.cuda.synchronize()
+            elif device.type == 'mps':
+                torch.mps.synchronize()
             t1 = time.perf_counter()
             dt = t1 - t0
             MFU = flops / dt / peak
