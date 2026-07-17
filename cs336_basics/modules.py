@@ -17,7 +17,8 @@ class Linear(nn.Module):
     def __init__(self, in_features:int, out_features:int, device:torch.device | None =None, dtype:torch.dtype | None =None):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype, device=device))
-        nn.init.trunc_normal_(self.weight, a=-3, b=3)
+        sigma = math.sqrt(2/ (in_features+out_features))
+        nn.init.trunc_normal_(self.weight, std=sigma, a=-3*sigma, b=3*sigma)
     
     def forward(self, x : Tensor) -> Tensor:
         return einx.dot("b ... i, o i -> b ... o", x, self.weight)
@@ -38,7 +39,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps=eps
         self.weight = nn.Parameter(torch.empty(d_model, dtype=dtype, device=device))
-        nn.init.trunc_normal_(self.weight, a=-3, b=3)
+        nn.init.constant_(self.weight, 1)
     
     def forward(self, x: Tensor) -> Tensor: 
         in_dtype=x.dtype
@@ -63,9 +64,6 @@ class SwiGLU(nn.Module):
         self.w2 = Linear(d_ff, d_model, device, dtype) # nn.Parameter(torch.empty(d_model, d_ff, device=device, dtype=dtype))
         self.w3 = Linear(d_model, d_ff, device, dtype) # nn.Parameter(torch.empty(d_ff, d_model, device=device, dtype=dtype))
         self.silu = SiLU()
-        nn.init.trunc_normal_(self.w1.weight, a=-3, b=3)
-        nn.init.trunc_normal_(self.w2.weight, a=-3, b=3)
-        nn.init.trunc_normal_(self.w3.weight, a=-3, b=3)
     
     def forward(self, x: Tensor):
         return einx.dot("b ... d_ff, d_model d_ff -> b ... d_model", 
@@ -348,11 +346,12 @@ def data_load(token_ids: npt.NDArray, batch_size:int, context_length:int, device
     tmp = torch.as_tensor(token_ids[idx], dtype=torch.long, device=device)
     return tmp[...,  : -1], tmp[..., 1:]
 
-def save_checkpoint(model:torch.nn.Module, optimizer:torch.optim.Optimizer, iteration:int, out:os.PathLike | typing.BinaryIO | str | typing.IO[bytes]):
+def save_checkpoint(model:torch.nn.Module, optimizer:torch.optim.Optimizer, iteration:int, out:os.PathLike | typing.BinaryIO | str | typing.IO[bytes], wandb_id: Optional[str] = None ):
     d: dict = {
         "model": model.state_dict(),
         "optim": optimizer.state_dict(),
-        "iter": iteration
+        "iter": iteration,
+        "wandb_id": wandb_id
     } 
 
     torch.save(d, out)
